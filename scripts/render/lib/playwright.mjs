@@ -67,32 +67,32 @@ export async function gotoStep(page, chapter, step) {
     if (window.__WEB_VIDEO_RENDER__ && typeof window.__WEB_VIDEO_RENDER__.goto === 'function') {
       window.__WEB_VIDEO_RENDER__.goto(chapter, step);
     }
-
-    /**
-     * Wait until render bridge reports the expected chapter/step
-     * @param {import('playwright').Page} page
-     * @param {number} chapter
-     * @param {number} step
-     * @param {number} [timeout=3000]
-     * @returns {Promise<boolean>}
-     */
-    async function waitForStepReached(page, chapter, step, timeout = 3000) {
-      const start = Date.now();
-      while (Date.now() - start < timeout) {
-        try {
-          const reached = await page.evaluate(({ chapter, step }) => {
-            const bridge = window.__WEB_VIDEO_RENDER__;
-            return Boolean(bridge && bridge.chapter === chapter && bridge.step === step);
-          }, { chapter, step });
-          if (reached) return true;
-        } catch {
-          // Page may be transitioning
-        }
-        await page.waitForTimeout(100);
-      }
-      return false;
-    }
   }, { chapter, step });
+}
+
+/**
+ * Wait until render bridge reports the expected chapter/step
+ * @param {import('playwright').Page} page
+ * @param {number} chapter
+ * @param {number} step
+ * @param {number} [timeout=3000]
+ * @returns {Promise<boolean>}
+ */
+async function waitForStepReached(page, chapter, step, timeout = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    try {
+      const reached = await page.evaluate(({ chapter, step }) => {
+        const bridge = window.__WEB_VIDEO_RENDER__;
+        return Boolean(bridge && bridge.chapter === chapter && bridge.step === step);
+      }, { chapter, step });
+      if (reached) return true;
+    } catch {
+      // Page may be transitioning
+    }
+    await page.waitForTimeout(100);
+  }
+  return false;
 }
 
 /**
