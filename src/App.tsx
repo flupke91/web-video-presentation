@@ -164,15 +164,6 @@ export default function App() {
     return clearTimers;
   }, [auto, hasTimeline, externalDriver, timeline, clearTimers, goToIndex, finish]);
 
-  // External driver: when renderer is controlling, page just waits.
-  // Renderer will call goto and finish. Still keep a safety fallback to finish after timeline end.
-  useEffect(() => {
-    if (!auto || !externalDriver || !hasTimeline || timeline.length === 0) return;
-    const last = timeline[timeline.length - 1];
-    const timer = window.setTimeout(finish, (last.end + 3) * 1000);
-    return () => window.clearTimeout(timer);
-  }, [auto, externalDriver, hasTimeline, timeline, finish]);
-
   const progress = timeline.length > 0 ? ((currentIndex + 1) / timeline.length) * 100 : 0;
 
   if (timelineError && auto) {

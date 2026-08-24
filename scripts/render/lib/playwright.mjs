@@ -40,7 +40,7 @@ export async function waitForDone(page, timeout = 600000) {
     }
     await page.waitForTimeout(500);
   }
-  throw new Error('PAGE_TIMEOUT');
+  throw new Error('RENDER_TIMEOUT');
 }
 
 /**
@@ -66,6 +66,31 @@ export async function gotoStep(page, chapter, step) {
   await page.evaluate(({ chapter, step }) => {
     if (window.__WEB_VIDEO_RENDER__ && typeof window.__WEB_VIDEO_RENDER__.goto === 'function') {
       window.__WEB_VIDEO_RENDER__.goto(chapter, step);
+    }
+
+    /**
+     * Wait until render bridge reports the expected chapter/step
+     * @param {import('playwright').Page} page
+     * @param {number} chapter
+     * @param {number} step
+     * @param {number} [timeout=3000]
+     * @returns {Promise<boolean>}
+     */
+    async function waitForStepReached(page, chapter, step, timeout = 3000) {
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        try {
+          const reached = await page.evaluate(({ chapter, step }) => {
+            const bridge = window.__WEB_VIDEO_RENDER__;
+            return Boolean(bridge && bridge.chapter === chapter && bridge.step === step);
+          }, { chapter, step });
+          if (reached) return true;
+        } catch {
+          // Page may be transitioning
+        }
+        await page.waitForTimeout(100);
+      }
+      return false;
     }
   }, { chapter, step });
 }
@@ -139,9 +164,13 @@ export async function recordVideo(options) {
       // External driver: drive the page according to timeline
       console.log('→ Driving external mode...');
       const startTime = Date.now();
+      let completedEntries = 0;
 
       for (const entry of timeline) {
         const { chapter, step, start } = entry;
+        if (Date.now() - startTime > timeout) {
+          throw new Error(`RENDER_TIMEOUT: timed out before chapter ${chapter} step ${step}`);
+        }
         // Wait until the start time (relative to page load)
         const elapsed = (Date.now() - startTime) / 1000;
         const waitSec = Math.max(0, start - elapsed);
@@ -150,6 +179,15 @@ export async function recordVideo(options) {
         }
         console.log(`  → Chapter ${chapter}, Step ${step} (${start.toFixed(2)}s)`);
         await gotoStep(page, chapter, step);
+        const reached = await waitForStepReached(page, chapter, step, 3000);
+        if (!reached) {
+          throw new Error(`RENDER_DRIVER_STALLED: goto not reached for chapter ${chapter} step ${step}`);
+        }
+        completedEntries += 1;
+      }
+
+      if (completedEntries !== timeline.length) {
+        throw new Error(`RENDER_DRIVER_STALLED: completed ${completedEntries}/${timeline.length} timeline entries`);
       }
 
       // Wait for last step to finish visually
@@ -159,15 +197,24 @@ export async function recordVideo(options) {
       if (waitSec > 0.01) {
         await page.waitForTimeout(waitSec * 1000);
       }
+      if (Date.now() - startTime > timeout) {
+        throw new Error('RENDER_TIMEOUT: timed out waiting for final timeline entry to finish');
+      }
+
+      const lastReached = await waitForStepReached(page, lastEntry.chapter, lastEntry.step, 3000);
+      if (!lastReached) {
+        throw new Error(`RENDER_DRIVER_STALLED: last timeline entry not reached (${lastEntry.chapter}-${lastEntry.step})`);
+      }
 
       // Set done
       await setDone(page);
-      console.log('✓ Playback complete');
+      await waitForDone(page, 5000);
+      console.log('RENDER_COMPLETE');
     } else {
       // Self-driven: wait for page to finish
       console.log('→ Waiting for auto playback to complete...');
       await waitForDone(page, timeout);
-      console.log('✓ Playback complete');
+      console.log('RENDER_COMPLETE');
     }
 
     // Close context to flush video
