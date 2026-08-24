@@ -6,6 +6,10 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 /**
  * 将一段 narration 按标点和最大长度切分为字幕片段
@@ -37,7 +41,7 @@ export function splitNarration(text, opts = {}) {
   };
 
   for (const chunk of chunks) {
-    // 如果单个 chunk 超过最大字符数，按字符硬切
+    // 如果单个 chunk 超过最大字符数，优先按词/字符切
     const pieces = breakLongChunk(chunk, maxChars);
     for (const piece of pieces) {
       if (buffer && (visibleLength(buffer) + visibleLength(piece) > maxChars)) {
@@ -53,7 +57,6 @@ export function splitNarration(text, opts = {}) {
 
   flushBuffer();
 
-  // 如果结果太多，可以合并非常短的行？这里保持简单不合并
   return result;
 }
 
@@ -64,6 +67,24 @@ function visibleLength(s) {
 
 function breakLongChunk(chunk, maxChars) {
   if (visibleLength(chunk) <= maxChars) return [chunk];
+
+  const englishWords = chunk.split(/\s+/).filter(Boolean);
+  if (englishWords.length > 1) {
+    const pieces = [];
+    let current = '';
+    for (const word of englishWords) {
+      const next = current ? `${current} ${word}` : word;
+      if (visibleLength(next) > maxChars && current) {
+        pieces.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    }
+    if (current) pieces.push(current);
+    return pieces;
+  }
+
   const pieces = [];
   let current = '';
   for (const char of chunk) {
@@ -75,6 +96,144 @@ function breakLongChunk(chunk, maxChars) {
   }
   if (current) pieces.push(current);
   return pieces;
+}
+
+function endsWithPause(text) {
+  return /[，。！？；、,.!?;:…·]$/.test(text.trim());
+}
+
+function cueWeight(text) {
+  const base = Math.max(1, visibleLength(text));
+  return base + (endsWithPause(text) ? 6 : 0);
+}
+
+function allocateDurations(totalDuration, weights, minDuration, maxDuration) {
+  const n = weights.length;
+  if (n === 0) return [];
+  if (n === 1) return [totalDuration];
+
+  const minPerCue = Math.min(minDuration, totalDuration / n);
+  const maxPerCue = Math.max(maxDuration, totalDuration / n);
+  const sumWeight = weights.reduce((a, b) => a + Math.max(0.0001, b), 0);
+
+  const durations = weights.map(w => (totalDuration * Math.max(0.0001, w)) / sumWeight);
+
+  for (let i = 0; i < n; i++) {
+    if (durations[i] < minPerCue) {
+      durations[i] = minPerCue;
+    } else if (durations[i] > maxPerCue) {
+      durations[i] = maxPerCue;
+    }
+  }
+
+  let rest = totalDuration - durations.reduce((a, b) => a + b, 0);
+  let guard = 0;
+  while (Math.abs(rest) > 1e-6 && guard < 10) {
+    guard += 1;
+    const adjustable = [];
+    for (let i = 0; i < n; i++) {
+      if (rest > 0 && durations[i] < maxPerCue - 1e-6) adjustable.push(i);
+      if (rest < 0 && durations[i] > minPerCue + 1e-6) adjustable.push(i);
+    }
+    if (adjustable.length === 0) break;
+    const per = rest / adjustable.length;
+    for (const idx of adjustable) {
+      durations[idx] += per;
+      if (durations[idx] > maxPerCue) durations[idx] = maxPerCue;
+      if (durations[idx] < minPerCue) durations[idx] = minPerCue;
+    }
+    rest = totalDuration - durations.reduce((a, b) => a + b, 0);
+  }
+
+  const currentSum = durations.reduce((a, b) => a + b, 0);
+  const correction = totalDuration - currentSum;
+  durations[n - 1] = Math.max(minPerCue, Math.min(maxPerCue, durations[n - 1] + correction));
+  return durations;
+}
+
+function parseCssVars(cssText) {
+  const vars = {};
+  const matches = cssText.matchAll(/--([a-zA-Z0-9-_]+)\s*:\s*([^;]+);/g);
+  for (const m of matches) {
+    vars[m[1]] = m[2].trim();
+  }
+  return vars;
+}
+
+function parseCssColor(input, fallback = { r: 255, g: 255, b: 255, a: 1 }) {
+  if (!input || typeof input !== 'string') return fallback;
+  const color = input.trim();
+  const hex = color.match(/^#([0-9a-fA-F]{6})$/);
+  if (hex) {
+    return {
+      r: parseInt(hex[1].slice(0, 2), 16),
+      g: parseInt(hex[1].slice(2, 4), 16),
+      b: parseInt(hex[1].slice(4, 6), 16),
+      a: 1,
+    };
+  }
+  const rgb = color.match(/^rgba?\(([^)]+)\)$/);
+  if (rgb) {
+    const parts = rgb[1].split(',').map(s => s.trim());
+    const r = Number(parts[0]);
+    const g = Number(parts[1]);
+    const b = Number(parts[2]);
+    const a = parts[3] === undefined ? 1 : Number(parts[3]);
+    if ([r, g, b, a].every(Number.isFinite)) {
+      return {
+        r: Math.max(0, Math.min(255, r)),
+        g: Math.max(0, Math.min(255, g)),
+        b: Math.max(0, Math.min(255, b)),
+        a: Math.max(0, Math.min(1, a)),
+      };
+    }
+  }
+  return fallback;
+}
+
+function toAssColor({ r, g, b, a }) {
+  const aa = Math.round((1 - a) * 255);
+  return `&H${aa.toString(16).padStart(2, '0').toUpperCase()}${Math.round(b).toString(16).padStart(2, '0').toUpperCase()}${Math.round(g).toString(16).padStart(2, '0').toUpperCase()}${Math.round(r).toString(16).padStart(2, '0').toUpperCase()}`;
+}
+
+function parsePixelNumber(value, fallback) {
+  if (!value) return fallback;
+  const m = String(value).match(/([0-9.]+)/);
+  if (!m) return fallback;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeFontName(value, fallback) {
+  if (!value) return fallback;
+  const first = value.split(',')[0].trim().replace(/^['"]|['"]$/g, '');
+  return first || fallback;
+}
+
+function loadSubtitleThemeTokens(themePath) {
+  const cssPath = themePath || path.join(PROJECT_ROOT, 'src', 'styles.css');
+  const defaults = {
+    font: 'Noto Sans SC',
+    size: 26,
+    primary: '&H00FFFFFF',
+    outline: '&H00000000',
+    back: '&H96000000',
+    marginV: 90,
+  };
+  try {
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const vars = parseCssVars(css);
+    return {
+      font: normalizeFontName(vars['subtitle-font'], defaults.font),
+      size: parsePixelNumber(vars['subtitle-size'], defaults.size),
+      primary: toAssColor(parseCssColor(vars['subtitle-color'], { r: 255, g: 255, b: 255, a: 1 })),
+      outline: '&H00000000',
+      back: toAssColor(parseCssColor(vars['subtitle-bg'], { r: 0, g: 0, b: 0, a: 0.65 })),
+      marginV: defaults.marginV,
+    };
+  } catch {
+    return defaults;
+  }
 }
 
 /**
@@ -97,17 +256,13 @@ export function generateCues(timeline, opts = {}) {
     if (textLines.length === 0) continue;
 
     const segmentDuration = entry.duration;
-    const totalChars = textLines.reduce((sum, line) => sum + Math.max(1, visibleLength(line)), 0);
+    const weights = textLines.map(line => cueWeight(line));
+    const durations = allocateDurations(segmentDuration, weights, minDuration, maxDuration);
 
     let cursor = entry.start;
-    for (const line of textLines) {
-      const weight = Math.max(1, visibleLength(line)) / totalChars;
-      let duration = segmentDuration * weight;
-      // 限制最短/最长
-      duration = Math.max(minDuration, duration);
-      duration = Math.min(maxDuration, duration);
-      // 如果超过 segment end，截断到 end
-      const end = Math.min(cursor + duration, entry.end);
+    for (let i = 0; i < textLines.length; i++) {
+      const line = textLines[i];
+      const end = i === textLines.length - 1 ? entry.end : Math.min(cursor + durations[i], entry.end);
       if (end > cursor + 0.05) {
         cues.push({
           index: index++,
@@ -185,6 +340,7 @@ function escapeAssText(text) {
  * @param {string} outputPath
  */
 export function writeAss(cues, outputPath) {
+  const theme = loadSubtitleThemeTokens();
   const header = `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
@@ -194,7 +350,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Noto Sans SC,26,&H00FFFFFF,&H000000FF,&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,2,0,2,60,60,90,1
+Style: Default,${theme.font},${Math.round(theme.size)},${theme.primary},&H000000FF,${theme.outline},${theme.back},0,0,0,0,100,100,0,0,3,0,0,2,60,60,${Math.round(theme.marginV)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -215,7 +371,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
  * @param {number} videoDuration
  * @returns {object} { valid, errors }
  */
-export function validateCues(cues, videoDuration) {
+export function validateCues(cues, videoDuration, opts = {}) {
+  const timeline = opts.timeline || null;
+  const coverageTolerance = opts.coverageTolerance ?? 0.08;
   const errors = [];
   if (!Array.isArray(cues)) return { valid: false, errors: ['Cues must be array'] };
   let prevEnd = 0;
@@ -229,6 +387,45 @@ export function validateCues(cues, videoDuration) {
     if (!cue.text || cue.text.trim().length === 0) errors.push(`Cue ${i}: empty text`);
     prevEnd = cue.end;
   }
+
+  if (Array.isArray(timeline)) {
+    let cueIndex = 0;
+    for (let i = 0; i < timeline.length; i++) {
+      const entry = timeline[i];
+      const overlaps = [];
+      while (cueIndex < cues.length && cues[cueIndex].end <= entry.start + coverageTolerance) {
+        cueIndex += 1;
+      }
+      let localIdx = cueIndex;
+      while (localIdx < cues.length && cues[localIdx].start < entry.end - coverageTolerance) {
+        if (cues[localIdx].end > entry.start + coverageTolerance) {
+          overlaps.push(cues[localIdx]);
+        }
+        localIdx += 1;
+      }
+
+      if (overlaps.length === 0) {
+        errors.push(`Coverage ${i}: no cues for chapter ${entry.chapter} step ${entry.step}`);
+        continue;
+      }
+
+      if (overlaps[0].start > entry.start + coverageTolerance) {
+        errors.push(`Coverage ${i}: starts late (${overlaps[0].start.toFixed(3)} > ${entry.start.toFixed(3)})`);
+      }
+      if (overlaps[overlaps.length - 1].end < entry.end - coverageTolerance) {
+        errors.push(`Coverage ${i}: ends early (${overlaps[overlaps.length - 1].end.toFixed(3)} < ${entry.end.toFixed(3)})`);
+      }
+
+      for (let j = 1; j < overlaps.length; j++) {
+        const gap = overlaps[j].start - overlaps[j - 1].end;
+        if (gap > coverageTolerance) {
+          errors.push(`Coverage ${i}: internal gap ${gap.toFixed(3)}s`);
+          break;
+        }
+      }
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 

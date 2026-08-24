@@ -155,7 +155,7 @@ async function main() {
       const filename = `ch${String(entry.chapter).padStart(2, '0')}_step${String(entry.step).padStart(2, '0')}.mp3`;
       return path.join(outDir.audio, filename);
     });
-    const fullAudioPath = path.join(outDir.audio, 'full.mp3');
+    const fullAudioPath = path.join(outDir.audio, 'full.m4a');
     await buildFullAudio(audioFiles, fullAudioPath);
 
     // Get durations
@@ -166,7 +166,7 @@ async function main() {
 
     // Compose
     const finalVideoPath = path.join(outDir.final, 'video.mp4');
-    await composeFinalVideo(rawVideoPath, fullAudioPath, outDir.subtitles, finalVideoPath, totalTimelineDuration);
+    await composeFinalVideo(rawVideoPath, fullAudioPath, outDir.subtitles, finalVideoPath, audioDuration);
 
     // Save duration info
     fs.writeFileSync(path.join(outDir.qa, 'duration.json'), JSON.stringify({
@@ -270,26 +270,41 @@ async function loadNarrations() {
 }
 
 async function buildFullAudio(audioFiles, outputPath) {
-  const existingFiles = audioFiles.filter(f => fs.existsSync(f));
-  if (existingFiles.length === 0) {
+  const missingFiles = audioFiles.filter(f => !fs.existsSync(f));
+  if (missingFiles.length > 0) {
+    throw new Error(`Missing audio files: ${missingFiles.join(', ')}`);
+  }
+  if (audioFiles.length === 0) {
     throw new Error('No audio files found');
   }
-  if (existingFiles.length === 1) {
-    fs.copyFileSync(existingFiles[0], outputPath);
+  const { runFFmpeg } = await import('./lib/ffmpeg.mjs');
+  if (audioFiles.length === 1) {
+    await runFFmpeg([
+      '-i', audioFiles[0],
+      '-ar', '48000',
+      '-ac', '2',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-y',
+      outputPath,
+    ]);
     return;
   }
-  // Use ffmpeg concat filter
-  const { createConcatFile, runFFmpeg } = await import('./lib/ffmpeg.mjs');
-  const concatFile = path.join(path.dirname(outputPath), 'concat.txt');
-  createConcatFile(existingFiles, concatFile);
-  await runFFmpeg([
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', concatFile,
-    '-c', 'copy',
+  const args = [];
+  for (const file of audioFiles) args.push('-i', file);
+  const streams = audioFiles.map((_, i) => `[${i}:a]`).join('');
+  const filter = `${streams}concat=n=${audioFiles.length}:v=0:a=1[aout]`;
+  args.push(
+    '-filter_complex', filter,
+    '-map', '[aout]',
+    '-ar', '48000',
+    '-ac', '2',
+    '-c:a', 'aac',
+    '-b:a', '192k',
     '-y',
-    outputPath,
-  ]);
+    outputPath
+  );
+  await runFFmpeg(args);
 }
 
 async function composeFinalVideo(rawVideo, audioPath, subtitlesDir, outputPath, targetDuration) {
@@ -426,10 +441,10 @@ async function runQC(outDir, timeline) {
       const timeline = readTimeline(timelinePath);
       const cues = generateCues(timeline);
       const videoInfo = await getVideoInfo(finalVideoPath);
-      const validation = validateCues(cues, videoInfo.duration);
+      const validation = validateCues(cues, videoInfo.duration, { timeline });
       if (!validation.valid) {
-        console.error('  ✗ Subtitle validation warnings:', validation.errors.join('; '));
-        // Not failing for now, just warn
+        console.error('  ✗ Subtitle validation failed:', validation.errors.join('; '));
+        allPassed = false;
       } else {
         console.log(`  ✓ ${cues.length} cues valid`);
       }

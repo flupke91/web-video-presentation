@@ -40,6 +40,7 @@ export default function App() {
   );
   const [currentIndex, setCurrentIndex] = useState(0);
   const [hasTimeline, setHasTimeline] = useState(!auto);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
   const timersRef = useRef<number[]>([]);
   const gotoRef = useRef<(chapter: number, step: number) => void>(() => {});
   const doneRef = useRef<() => void>(() => {});
@@ -83,7 +84,7 @@ export default function App() {
 
   // Ready signal after hydration and timeline ready
   useEffect(() => {
-    if (!hasTimeline) return; // Wait for timeline before signaling ready
+    if (!hasTimeline || timelineError) return; // Wait for timeline before signaling ready
 
     window.__WEB_VIDEO_READY__ = true;
 
@@ -103,7 +104,7 @@ export default function App() {
       window.__WEB_VIDEO_READY__ = false;
       window.__WEB_VIDEO_DONE__ = false;
     };
-  }, [hasTimeline, current?.chapter, current?.step, next, prev]);
+  }, [hasTimeline, timelineError, current?.chapter, current?.step, next, prev]);
 
   // Load timeline before ready
   useEffect(() => {
@@ -119,14 +120,16 @@ export default function App() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as TimelineEntry[];
         if (!cancelled && Array.isArray(data) && data.length > 0) {
+          setTimelineError(null);
           setTimeline(data);
           setHasTimeline(true);
+          return;
         }
+        throw new Error('Empty timeline');
       } catch (err) {
-        console.warn('Timeline not found, fallback to default narrations', err);
         if (!cancelled) {
-          setTimeline(buildFallbackTimeline(DEFAULT_NARRATIONS));
-          setHasTimeline(true);
+          setTimelineError('TIMELINE_NOT_FOUND');
+          setHasTimeline(false);
         }
       }
     })();
@@ -171,6 +174,14 @@ export default function App() {
   }, [auto, externalDriver, hasTimeline, timeline, finish]);
 
   const progress = timeline.length > 0 ? ((currentIndex + 1) / timeline.length) * 100 : 0;
+
+  if (timelineError && auto) {
+    return (
+      <div className="stage">
+        <div className="chapter-indicator">{timelineError}</div>
+      </div>
+    );
+  }
 
   if (!hasTimeline && auto) {
     return (

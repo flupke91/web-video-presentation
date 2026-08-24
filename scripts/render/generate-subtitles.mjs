@@ -48,9 +48,10 @@ async function main() {
   console.log(`✓ ASS: ${assPath} (${cues.length} cues)`);
 
   // Validate generated cues
-  const cueValidation = validateCues(cues, totalDuration);
+  const cueValidation = validateCues(cues, totalDuration, { timeline });
   if (!cueValidation.valid) {
-    console.warn('⚠ Subtitle validation warnings:', cueValidation.errors.join('; '));
+    console.error('SUBTITLE_GENERATION_FAILED:', cueValidation.errors.join('; '));
+    process.exit(1);
   }
 }
 
