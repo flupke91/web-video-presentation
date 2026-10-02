@@ -73,17 +73,26 @@ check('ffprobe', () => {
 
 check('Playwright', async () => {
   try {
-    // Try importing playwright
     const { chromium } = await import('playwright');
-    // Check if browsers are installed
-    try {
-      const executablePath = chromium.executablePath();
-      if (!executablePath) {
-        return { ok: false, message: 'Playwright browsers not installed. Run: npx playwright install chromium' };
-      }
-      return { ok: true, message: executablePath };
-    } catch {
+    const executablePath = chromium.executablePath();
+    if (!executablePath) {
       return { ok: false, message: 'Playwright browsers not installed. Run: npx playwright install chromium' };
+    }
+
+    let browser = null;
+    try {
+      browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+      const page = await browser.newPage();
+      await page.setContent('<html><body>ok</body></html>');
+      await page.close();
+      return { ok: true, message: `${executablePath} (launch ok)` };
+    } catch (err) {
+      return { ok: false, message: `Playwright launch failed: ${err.message}` };
+    } finally {
+      if (browser) await browser.close();
     }
   } catch {
     return { ok: false, message: 'Playwright package not installed. Run: npm install playwright' };

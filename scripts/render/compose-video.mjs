@@ -18,7 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { readTimeline, validateTimeline } from './lib/timeline.mjs';
-import { getVideoInfo, runFFmpeg, checkFFmpeg, createConcatFile, escapeFilterPath } from './lib/ffmpeg.mjs';
+import { getVideoInfo, runFFmpeg, checkFFmpeg, escapeFilterPath } from './lib/ffmpeg.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -89,7 +89,7 @@ async function main() {
     return path.join(outDir.audio, filename);
   });
 
-  const fullAudioPath = path.join(outDir.audio, 'full.mp3');
+  const fullAudioPath = path.join(outDir.audio, 'full.m4a');
   console.log('→ Building full audio...');
   await buildFullAudio(audioFiles, fullAudioPath);
   console.log(`✓ Full audio: ${fullAudioPath}`);
@@ -125,7 +125,7 @@ async function main() {
   // 5. Compose final video
   const finalVideoPath = path.join(outDir.final, 'video.mp4');
   console.log('→ Composing final video...');
-  await composeFinalVideo(rawVideoPath, fullAudioPath, outDir.subtitles, finalVideoPath, totalTimelineDuration);
+  await composeFinalVideo(rawVideoPath, fullAudioPath, outDir.subtitles, finalVideoPath, audioDuration);
   console.log(`✓ Final video: ${finalVideoPath}`);
 
   // 6. Save duration info
@@ -148,31 +148,43 @@ async function main() {
  * Build full audio by concatenating all segments
  */
 async function buildFullAudio(audioFiles, outputPath) {
-  // Filter existing files
-  const existingFiles = audioFiles.filter(f => fs.existsSync(f));
-  if (existingFiles.length === 0) {
+  const missingFiles = audioFiles.filter(f => !fs.existsSync(f));
+  if (missingFiles.length > 0) {
+    throw new Error(`Missing audio files: ${missingFiles.join(', ')}`);
+  }
+  if (audioFiles.length === 0) {
     throw new Error('No audio files found');
   }
 
-  if (existingFiles.length === 1) {
-    // Just copy
-    fs.copyFileSync(existingFiles[0], outputPath);
+  if (audioFiles.length === 1) {
+    await runFFmpeg([
+      '-i', audioFiles[0],
+      '-ar', '48000',
+      '-ac', '2',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-y',
+      outputPath,
+    ]);
     return;
   }
 
-  // Use concat demuxer with absolute paths
-  const concatFile = path.join(path.dirname(outputPath), 'concat.txt');
-  createConcatFile(existingFiles, concatFile);
-
-  // Run ffmpeg concat
-  const args = [
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', concatFile,
-    '-c', 'copy',
+  const args = [];
+  for (const file of audioFiles) {
+    args.push('-i', file);
+  }
+  const streams = audioFiles.map((_, i) => `[${i}:a]`).join('');
+  const filter = `${streams}concat=n=${audioFiles.length}:v=0:a=1[aout]`;
+  args.push(
+    '-filter_complex', filter,
+    '-map', '[aout]',
+    '-ar', '48000',
+    '-ac', '2',
+    '-c:a', 'aac',
+    '-b:a', '192k',
     '-y',
     outputPath,
-  ];
+  );
   await runFFmpeg(args);
 }
 

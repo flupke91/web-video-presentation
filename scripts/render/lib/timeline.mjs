@@ -21,18 +21,17 @@ export async function generateTimeline(narrations, audioDir, outputPath) {
     const filename = `ch${String(n.chapter).padStart(2, '0')}_step${String(n.step).padStart(2, '0')}.mp3`;
     const audioPath = path.join(audioDir, filename);
 
+    if (!fs.existsSync(audioPath)) {
+      throw new Error(`AUDIO_MISSING: ${audioPath}`);
+    }
     let duration = 0;
-    if (fs.existsSync(audioPath)) {
-      try {
-        duration = await getAudioDuration(audioPath);
-      } catch (err) {
-        console.warn(`Warning: Could not get duration for ${filename}: ${err.message}`);
-        // Fallback: estimate duration based on text length
-        duration = estimateDuration(n.narration);
-      }
-    } else {
-      console.warn(`Warning: Audio file not found: ${audioPath}`);
-      duration = estimateDuration(n.narration);
+    try {
+      duration = await getAudioDuration(audioPath);
+    } catch (err) {
+      throw new Error(`AUDIO_DURATION_FAILED: ${filename}: ${err.message}`);
+    }
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error(`AUDIO_DURATION_FAILED: ${filename}: invalid duration ${duration}`);
     }
 
     const start = currentTime;
@@ -65,19 +64,6 @@ export async function generateTimeline(narrations, audioDir, outputPath) {
 
   console.log(`✓ Timeline generated: ${outputPath} (${entries.length} entries, total ${currentTime.toFixed(2)}s)`);
   return entries;
-}
-
-/**
- * Estimate duration based on text length (fallback)
- * ~3 characters per second for Chinese, ~5 for English
- */
-function estimateDuration(text) {
-  const chineseChars = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
-  const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
-  const otherChars = text.length - chineseChars;
-  // Chinese: ~3 chars/s, English: ~5 words/s, others: ~10 chars/s
-  const duration = Math.max(0.5, chineseChars / 3 + englishWords / 5 + otherChars / 10);
-  return Math.round(duration * 100) / 100;
 }
 
 /**

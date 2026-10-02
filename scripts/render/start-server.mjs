@@ -71,6 +71,7 @@ function waitForServer(port, timeout = 30000) {
 export async function startServer(options = {}) {
   const build = options.build === true;
   const timeout = options.timeout || 30000;
+  const preferredPort = options.port || (build ? 4173 : 5173);
 
   const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
@@ -79,11 +80,12 @@ export async function startServer(options = {}) {
     execFileSync(npmCmd, ['run', 'build'], { cwd: PROJECT_ROOT, stdio: 'inherit', timeout: 120000 });
   }
 
+  const port = await getPort(preferredPort);
   const args = build
-    ? ['run', 'preview', '--', '--host', '127.0.0.1']
-    : ['run', 'dev', '--', '--host', '127.0.0.1'];
+    ? ['run', 'preview', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort']
+    : ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port), '--strictPort'];
 
-  console.log(`→ Starting server${build ? ' (build+preview)' : ' (dev)'}`);
+  console.log(`→ Starting server${build ? ' (build+preview)' : ' (dev)'} on port ${port}`);
 
   const serverProcess = spawn(npmCmd, args, {
     cwd: PROJECT_ROOT,
@@ -91,28 +93,16 @@ export async function startServer(options = {}) {
     env: { ...process.env, BROWSER: 'none' },
   });
 
-  let actualPort = null;
-
   serverProcess.stdout.on('data', (data) => {
     const msg = data.toString().trim();
     if (msg) {
       console.log(`  [server] ${msg}`);
-      // Try to detect port from Vite output
-      const match = msg.match(/Local:\s+http:\/\/127\.0\.0\.1:(\d+)/);
-      if (match) {
-        actualPort = parseInt(match[1]);
-      }
     }
   });
   serverProcess.stderr.on('data', (data) => {
     const msg = data.toString().trim();
     if (msg) {
       console.log(`  [server] ${msg}`);
-      // Vite may output to stderr
-      const match = msg.match(/Local:\s+http:\/\/127\.0\.0\.1:(\d+)/);
-      if (match) {
-        actualPort = parseInt(match[1]);
-      }
     }
   });
 
@@ -120,36 +110,16 @@ export async function startServer(options = {}) {
     console.error('Server spawn error:', err.message);
   });
 
-  // Wait for server ready
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    if (actualPort) {
-      try {
-        await waitForServer(actualPort, 2000);
-        console.log(`✓ Server ready at http://127.0.0.1:${actualPort}`);
-        return { serverProcess, port: actualPort };
-      } catch {
-        // Port not ready yet, continue waiting
-      }
+  try {
+    await waitForServer(port, timeout);
+    console.log(`✓ Server ready at http://127.0.0.1:${port}`);
+    return { serverProcess, port };
+  } catch {
+    if (!serverProcess.killed) {
+      killProcess(serverProcess);
     }
-    await new Promise(r => setTimeout(r, 500));
+    throw new Error('SERVER_START_FAILED: Could not start server on selected port');
   }
-
-  // If we didn't detect port, try common ports
-  const fallbackPorts = [5173, 4173, 4174];
-  for (const pb of fallbackPorts) {
-    try {
-      await waitForServer(pb, 2000);
-      console.log(`✓ Server ready at http://127.0.0.1:${pb}`);
-      return { serverProcess, port: pb };
-    } catch {
-      // continue
-    }
-  }
-
-  // Cleanup
-  killProcess(serverProcess);
-  throw new Error('SERVER_START_FAILED: Could not detect or find server port');
 }
 
 /**
