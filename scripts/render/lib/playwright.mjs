@@ -120,7 +120,7 @@ export async function recordVideo(options) {
     }
   }
 
-  const browser = await chromium.launch({
+  const launchOptions = {
     headless: true,
     args: [
       '--no-sandbox',
@@ -130,7 +130,20 @@ export async function recordVideo(options) {
       '--use-fake-ui-for-media-stream',
       '--use-fake-device-for-media-stream',
     ],
-  });
+  };
+
+  let browser;
+  for (const channel of ['chrome', 'msedge']) {
+    try {
+      browser = await chromium.launch({ ...launchOptions, channel });
+      break;
+    } catch {
+      // Fallback if channel is not installed
+    }
+  }
+  if (!browser) {
+    browser = await chromium.launch(launchOptions);
+  }
 
   const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },

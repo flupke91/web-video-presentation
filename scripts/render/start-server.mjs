@@ -77,7 +77,7 @@ export async function startServer(options = {}) {
 
   if (build) {
     console.log('  Building production bundle...');
-    execFileSync(npmCmd, ['run', 'build'], { cwd: PROJECT_ROOT, stdio: 'inherit', timeout: 120000 });
+    execFileSync(npmCmd, ['run', 'build'], { cwd: PROJECT_ROOT, stdio: 'inherit', timeout: 120000, shell: process.platform === 'win32' });
   }
 
   const port = await getPort(preferredPort);
@@ -91,6 +91,7 @@ export async function startServer(options = {}) {
     cwd: PROJECT_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, BROWSER: 'none' },
+    shell: process.platform === 'win32',
   });
 
   serverProcess.stdout.on('data', (data) => {

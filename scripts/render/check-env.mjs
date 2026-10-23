@@ -12,7 +12,7 @@
  * - Fonts (required CJK)
  */
 
-import { execFileSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -32,8 +32,27 @@ function tryExec(cmd, args, timeout = 10000) {
 }
 
 function resolveExe(program) {
-  if (process.platform === 'win32') return `${program}.exe`;
-  return program;
+  const exe = process.platform === 'win32' ? `${program}.exe` : program;
+  if (process.platform === 'win32') {
+    try {
+      execFileSync(exe, ['-version'], { stdio: 'ignore' });
+      return exe;
+    } catch {
+      const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\fengzheng\\AppData\\Local';
+      const wingetDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+      if (fs.existsSync(wingetDir)) {
+        for (const entry of fs.readdirSync(wingetDir)) {
+          if (entry.toLowerCase().includes('ffmpeg')) {
+            const candidate1 = path.join(wingetDir, entry, 'ffmpeg-9.0.2-full_build', 'bin', exe);
+            if (fs.existsSync(candidate1)) return candidate1;
+            const candidate2 = path.join(wingetDir, entry, 'bin', exe);
+            if (fs.existsSync(candidate2)) return candidate2;
+          }
+        }
+      }
+    }
+  }
+  return exe;
 }
 
 check('Node.js', () => {
@@ -46,11 +65,12 @@ check('Node.js', () => {
 });
 
 check('npm', () => {
-  const result = tryExec(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version']);
-  if (result.ok) {
-    return { ok: true, message: execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--version'], { encoding: 'utf-8', timeout: 5000 }).trim() };
+  try {
+    const v = execSync(process.platform === 'win32' ? 'npm.cmd -v' : 'npm -v', { encoding: 'utf-8', timeout: 5000 }).trim();
+    return { ok: true, message: `v${v}` };
+  } catch {
+    return { ok: false, message: 'npm not found in PATH' };
   }
-  return { ok: false, message: 'npm not found in PATH' };
 });
 
 check('ffmpeg', () => {
@@ -71,31 +91,45 @@ check('ffprobe', () => {
   return { ok: false, message: 'ffprobe not found. Install FFmpeg and add to PATH.' };
 });
 
-check('Playwright', async () => {
+check('Playwright / Chrome', async () => {
   try {
     const { chromium } = await import('playwright');
-    const executablePath = chromium.executablePath();
-    if (!executablePath) {
-      return { ok: false, message: 'Playwright browsers not installed. Run: npx playwright install chromium' };
+    let browser = null;
+    let browserDesc = '';
+
+    for (const channel of ['chrome', 'msedge']) {
+      try {
+        browser = await chromium.launch({
+          channel,
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        browserDesc = `Local ${channel.toUpperCase()} (${browser.version()})`;
+        break;
+      } catch {
+        // try next channel
+      }
     }
 
-    let browser = null;
-    try {
-      browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
-      const page = await browser.newPage();
-      await page.setContent('<html><body>ok</body></html>');
-      await page.close();
-      return { ok: true, message: `${executablePath} (launch ok)` };
-    } catch (err) {
-      return { ok: false, message: `Playwright launch failed: ${err.message}` };
-    } finally {
-      if (browser) await browser.close();
+    if (!browser) {
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        browserDesc = `Chromium (${browser.version()})`;
+      } catch (err) {
+        return { ok: false, message: `No browser found: ${err.message}` };
+      }
     }
-  } catch {
-    return { ok: false, message: 'Playwright package not installed. Run: npm install playwright' };
+
+    const page = await browser.newPage();
+    await page.setContent('<html><body>ok</body></html>');
+    await page.close();
+    await browser.close();
+    return { ok: true, message: `${browserDesc} (launch ok)` };
+  } catch (err) {
+    return { ok: false, message: `Playwright package check failed: ${err.message}` };
   }
 });
 

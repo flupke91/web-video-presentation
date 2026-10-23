@@ -9,10 +9,27 @@ import path from 'path';
  * Resolve executable based on platform
  */
 function resolveExe(program) {
+  const exe = process.platform === 'win32' ? `${program}.exe` : program;
   if (process.platform === 'win32') {
-    return `${program}.exe`;
+    try {
+      execFileSync(exe, ['-version'], { stdio: 'ignore' });
+      return exe;
+    } catch {
+      const localAppData = process.env.LOCALAPPDATA || 'C:\\Users\\fengzheng\\AppData\\Local';
+      const wingetDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+      if (fs.existsSync(wingetDir)) {
+        for (const entry of fs.readdirSync(wingetDir)) {
+          if (entry.toLowerCase().includes('ffmpeg')) {
+            const candidate1 = path.join(wingetDir, entry, 'ffmpeg-9.0.2-full_build', 'bin', exe);
+            if (fs.existsSync(candidate1)) return candidate1;
+            const candidate2 = path.join(wingetDir, entry, 'bin', exe);
+            if (fs.existsSync(candidate2)) return candidate2;
+          }
+        }
+      }
+    }
   }
-  return program;
+  return exe;
 }
 
 /**
