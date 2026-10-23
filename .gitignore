@@ -18,3 +18,17 @@ yarn-error.log*
 *.swp
 *.swo
 *~
+
+# ---- 生成物（由 render:audio / render 产出，不入库）----
+public/timeline/*.json
+public/audio/
+out/audio/
+out/subtitles/
+out/timeline/
+out/qa/
+out/final/
+
+# ---- Python 辅助脚本产生的缓存 ----
+__pycache__/
+*.pyc
+.venv/
